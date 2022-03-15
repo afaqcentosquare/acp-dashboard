@@ -8,6 +8,7 @@ use Illuminate\Support\Facades\Hash;
 use App\Models\MerchantTransaction;
 use App\Models\MerchantAsset;
 use App\Models\MerchantAssetOrder;
+use App\Models\USSDSession;
 use Carbon\Carbon;
 
 class ACPUSSDController extends Controller {
@@ -73,6 +74,52 @@ class ACPUSSDController extends Controller {
         }
     }
 
+    public function create_ussd_session($sessionId, $phoneNumber, $currentMenu, $previousMenu, $nextMenu) {
+        // echo $phoneNumber; die;
+        $ussd_session = USSDSession::create(["session_id"=>$sessionId,
+                                            "phone_number"=>$phoneNumber,
+                                            "current_screen"=>$currentMenu,
+                                            "previous_screen"=>$previousMenu,
+                                            "next_screen"=>$nextMenu]);
+        }
+
+    public function get_ussd_session($sessionId) {
+        $ussd_session = USSDSession::where(["session_id"=>$sessionId])->first();
+        return $ussd_session;
+        }
+    
+    public function update_ussd_session($sessionId, $currentMenu, $previousMenu, $nextMenu) {
+        $ussd_session = USSDSession::where(["session_id"=>$sessionId])->update(['current_screen'=>$currentMenu, 'previous_screen'=>$previousMenu, 'next_screen'=>$nextMenu]);
+        return $ussd_session;
+    }
+
+    public function main_menu() {
+        $merchantMenu = array(
+            "pre" =>  "CON What would you want to check \n",
+            "options" => array("1. Due Payments \n", "2. Pending Payments \n",
+                                "3. Overdue Payments \n", "4. Past Overdue Payments\n", "5. Defaulted Payments \n", "6. My Assets \n",
+                                "7. Summary Statement", ) 
+        );
+        $response  = $merchantMenu['pre'];
+        $response .= $merchantMenu['options'][0];
+        $response .= $merchantMenu['options'][1];
+        $response .= $merchantMenu['options'][2];
+        $response .= $merchantMenu['options'][3];
+        $response .= $merchantMenu['options'][4];
+        $response .= $merchantMenu['options'][5];
+        $response .= $merchantMenu['options'][6];
+
+        return $response;
+    }
+
+    public function return_to_main_menu($sessionId) {
+        $this->update_ussd_session($sessionId, "MAIN_MENU", "PWD_MENU", "MAIN_MENU");
+        $response  = $this->main_menu();
+
+        return $response;
+
+    }
+
     public function store(Request $request) {
         $input_response = explode('*', $request->input("text"));
         // Read the variables sent via POST from Africa's Talking API
@@ -82,11 +129,19 @@ class ACPUSSDController extends Controller {
         $text = $request->input("text");
         $response = "";
 
+        $last_input = explode('*', $request->input("text"));
+        $end_last_input = end($last_input);
+
+        // echo json_encode($phoneNumber); die;
+
+        $current_menu = "";
+
         $today_date = Carbon::now("Africa/Nairobi")->toDateString();
 
         $makePaymentText = "1. Make Payment \n";
-        $cancelSession = "2. Cancel \n";
-        $assetsCancelSession = "00. Cancel";
+        $backScreen = "2. Back \n";
+        $assetsBackSession = "\n 00. Back \n";
+        $assetsHomeSession = "99. Main Menu";
 
 
         $email_screen = array(
@@ -102,10 +157,13 @@ class ACPUSSDController extends Controller {
             "options" => array("1. Ongoing Assets \n", "2. Defaulted Assets \n", "3. Completed Assets \n\n")
         );
 
-        if ($text == "") {
+        if ($end_last_input== "") {
+            $current_menu = "EMAIL_MENU";
+            $this->create_ussd_session($sessionId, $phoneNumber, $current_menu, $current_menu, "PWD_MENU");
             $response = $email_screen['pre'];
             
         } else if (isset($input_response[0]) && !isset($input_response[1])) {
+            $this->update_ussd_session($sessionId, "PWD_MENU", "EMAIL_MENU", "MAIN_MENU");
             $response = $pwd_screen['pre'];
 
         } else if (isset($input_response[0]) && isset($input_response[1])){
@@ -200,34 +258,27 @@ class ACPUSSDController extends Controller {
                         $completed_assets_ids = [];
                     }
 
-                    $merchantMenu = array(
-                        "pre" =>  "CON What would you want to check \n",
-                        "options" => array("1. Due Payments \n", "2. Pending Payments \n",
-                                            "3. Overdue Payments \n", "4. Past Overdue Payments\n", "5. Defaulted Payments \n", "6. My Assets \n",
-                                            "7. Summary Statement", ) 
-                    );
-
                     $duePayment = array(
                         "pre" => "CON Total Due Payment Today is KES {$total_due_amount} \n",
-                        "options" => array($makePaymentText, $cancelSession)
+                        "options" => array($makePaymentText, $backScreen)
                     );
                     $pendingPayment = array(
                         "pre" => "CON Total Pending Payment Today is KES {$total_pending_amount} \n",
-                        "options" => array($makePaymentText, $cancelSession)
+                        "options" => array($makePaymentText, $backScreen)
                     );
                     $overduePayment = array(
                         "pre" => "CON Total Overdue Payment Today is KES {$total_over_due_amount} \n",
-                        "options" => array($makePaymentText, $cancelSession)
+                        "options" => array($makePaymentText, $backScreen)
                     );
 
                     $pastOverduePayment = array(
                         "pre" => "CON Total Past Overdue Payment Today is KES {$total_past_over_due_amount} \n",
-                        "options" => array($makePaymentText, $cancelSession)
+                        "options" => array($makePaymentText, $backScreen)
                     );
 
                     $defaultedPayment = array(
                         "pre" => "CON Total Defaulted Payment Today is KES {$total_defaulted_amount} \n",
-                        "options" => array($makePaymentText, $cancelSession)
+                        "options" => array($makePaymentText, $backScreen)
                     );
 
                     $summaryStatement = array(
@@ -262,94 +313,108 @@ class ACPUSSDController extends Controller {
                     for ($x=0; $x < count($defaultedAssetsIndexes); $x++) {
                         array_push($defaultedAssetsText, $merchantCredentials.'*'."6*2*{$x}");
                     }
-                    if ($text == $merchantCredentials){
-                        $response  = $merchantMenu['pre'];
-                        $response .= $merchantMenu['options'][0];
-                        $response .= $merchantMenu['options'][1];
-                        $response .= $merchantMenu['options'][2];
-                        $response .= $merchantMenu['options'][3];
-                        $response .= $merchantMenu['options'][4];
-                        $response .= $merchantMenu['options'][5];
-                        $response .= $merchantMenu['options'][6];
+                    if ($this->get_ussd_session($sessionId)->current_screen=="PWD_MENU"){
+                        $this->update_ussd_session($sessionId, "MAIN_MENU", "PWD_MENU", "MAIN_MENU");
+                        $response  = $this->main_menu();
 
-                    } else if ($text == $merchantCredentials.'*'.'1') {
+                    } else if ($this->get_ussd_session($sessionId)->current_screen=="MAIN_MENU" && $end_last_input == 1) {
+                        $this->update_ussd_session($sessionId, "DUE_MENU", "MAIN_MENU", "MAIN_MENU");
                         $response = $duePayment["pre"];
                         $response .= $duePayment["options"][0];
                         $response .= $duePayment["options"][1];
             
-                    } else if ($text == $merchantCredentials.'*'.'1'.'*'.'1') {
+                    } else if ($this->get_ussd_session($sessionId)->current_screen=="DUE_MENU" && $end_last_input == 1) {
                         $response = $this->make_payment($merchant->id, 'today');
 
-                    } else if ($text == $merchantCredentials.'*'.'1'.'*'.'2') {
-                        $response = 'END Goodbye!';
+                    } else if ($this->get_ussd_session($sessionId)->current_screen=="DUE_MENU" && $end_last_input == 2) {
+                        $response = $this->return_to_main_menu($sessionId);
 
-                    } else if ($text == $merchantCredentials.'*'.'1'.'*'.'2'.'*'.'2') {
+                    } else if ($this->get_ussd_session($sessionId)->current_screen=="MAIN_MENU" && $end_last_input == 2) {
+                        $this->update_ussd_session($sessionId, "PENDING_MENU", "MAIN_MENU", "MAIN_MENU");
                         $response = $pendingPayment["pre"];
                         $response .= $pendingPayment["options"][0];
                         $response .= $pendingPayment["options"][1];
             
-                    } else if ($text == $merchantCredentials.'*'.'2'.'*'.'1') {
+                    } else if ($this->get_ussd_session($sessionId)->current_screen=="PENDING_MENU" && $end_last_input == 1) {
                         $response = $this->make_payment($merchant->id, 'pending');
 
-                    } else if ($text == $merchantCredentials.'*'.'2'.'*'.'2') {
-                        $response = 'END Goodbye!';
+                    } else if ($this->get_ussd_session($sessionId)->current_screen=="PENDING_MENU" && $end_last_input == 2) {
+                        $response = $this->return_to_main_menu($sessionId);
 
-                    } else if ($text == $merchantCredentials.'*'.'3') {
+                    } else if ($this->get_ussd_session($sessionId)->current_screen=="MAIN_MENU" && $end_last_input == 3) {
+                        $this->update_ussd_session($sessionId, "OVERDUE_MENU", "MAIN_MENU", "MAIN_MENU");
                         $response = $overduePayment["pre"];
                         $response .= $overduePayment["options"][0];
                         $response .= $overduePayment["options"][1];
             
-                    }  else if ($text == $merchantCredentials.'*'.'3'.'*'.'1') {
+                    }  else if ($this->get_ussd_session($sessionId)->current_screen=="OVERDUE_MENU" && $end_last_input == 1) {
                         $response = $this->make_payment($merchant->id, 'over_due');
 
-                    } else if ($text == $merchantCredentials.'*'.'3'.'*'.'2') {
-                        $response = 'END Goodbye!';
+                    } else if ($this->get_ussd_session($sessionId)->current_screen=="OVERDUE_MENU" && $end_last_input == 2) {
+                        $response = $this->return_to_main_menu($sessionId);
 
-                    } else if ($text == $merchantCredentials.'*'.'4') {
+                    } else if ($this->get_ussd_session($sessionId)->current_screen=="MAIN_MENU" && $end_last_input == 4) {
+                        $this->update_ussd_session($sessionId, "PAST_OVERDUE_MENU", "MAIN_MENU", "MAIN_MENU");
                         $response = $pastOverduePayment["pre"];
                         $response .= $pastOverduePayment["options"][0];
                         $response .= $pastOverduePayment["options"][1];
             
-                    } else if ($text == $merchantCredentials.'*'.'4'.'*'.'1') {
+                    } else if ($this->get_ussd_session($sessionId)->current_screen=="PAST_OVERDUE_MENU" && $end_last_input == 1) {
                         $response = $this->make_payment($merchant->id, 'past_over_due');
 
 
-                    } else if ($text == $merchantCredentials.'*'.'4'.'*'.'2') {
-                        $response = 'END Goodbye!';
+                    } else if ($this->get_ussd_session($sessionId)->current_screen=="PAST_OVERDUE_MENU" && $end_last_input == 2) {
+                        $response = $this->return_to_main_menu($sessionId);
 
-                    } else if ($text == $merchantCredentials.'*'.'5') {
+                    } else if ($this->get_ussd_session($sessionId)->current_screen=="MAIN_MENU" && $end_last_input == 5) {
+                        $this->update_ussd_session($sessionId, "DEFAULTED_MENU", "MAIN_MENU", "MAIN_MENU");
                         $response = $defaultedPayment["pre"];
                         $response .= $defaultedPayment["options"][0];
                         $response .= $defaultedPayment["options"][1];
             
-                    } else if ($text == $merchantCredentials.'*'.'5'.'*'.'1') {
+                    } else if ($this->get_ussd_session($sessionId)->current_screen=="DEFAULTED_MENU" && $end_last_input == 1) {
                         $response = $this->make_payment($merchant->id, 'defaulted');
 
-                    } else if ($text == $merchantCredentials.'*'.'5'.'*'.'2') {
-                        $response = 'END Goodbye!';
+                    } else if ($this->get_ussd_session($sessionId)->current_screen=="DEFAULTED_MENU" && $end_last_input == 2) {
+                        $response = $this->return_to_main_menu($sessionId);
 
-                    } else if($text == $merchantCredentials.'*'.'6') { 
+                    } else if($this->get_ussd_session($sessionId)->current_screen=="MAIN_MENU" && $end_last_input == 6) {
+                        $this->update_ussd_session($sessionId, "ASSETS_MAIN_MENU", "MAIN_MENU", "MAIN_MENU");
                         $response = $assetsMenu["pre"];
                         $response .= $assetsMenu["options"][0];
                         $response .= $assetsMenu["options"][1];
                         $response .= $assetsMenu["options"][2];
-                        $response .= $assetsCancelSession;
+                        $response .= $assetsBackSession;
             
-                    } else if($text == $merchantCredentials.'*'.'6'.'*'.'1') {
+                    } else if($this->get_ussd_session($sessionId)->current_screen=="ASSETS_MAIN_MENU" && $end_last_input == 1) {
+                        $this->update_ussd_session($sessionId, "ONGOING_ASSETS_MAIN_MENU", "MAIN_MENU", "MAIN_MENU");
                         $response = $ongoingAssets["pre"];
                         if ($ongoing_assets_ids) {
                             foreach($ongoing_assets_ids as $asset_index => $asset)
                                 $response .= $asset_index.'. '.$this->get_asset_name($asset). "\n";
-                            $response .= $assetsCancelSession;
+                            $response .= $assetsBackSession;
+                            $response .= $assetsHomeSession;
                         } else if (!$ongoing_assets_ids) {
                             $response = 'END You do not have any ONGOING assets!';
                         }
             
-                    } else if($text == $merchantCredentials.'*'.'6'.'*'.'1'.'*'.'00') {
-                        $response = 'END Goodbye!';
+                    } else if($this->get_ussd_session($sessionId)->current_screen=="ASSETS_MAIN_MENU" && $end_last_input == 00) {
+                        $response = $this->return_to_main_menu($sessionId);
 
-                    } else if(in_array($text, $ongoingAssetsText)) {
-                        $selectedAsset = explode('*', $text)[4];
+                    } else if($this->get_ussd_session($sessionId)->current_screen=="ONGOING_ASSETS_MAIN_MENU" && $end_last_input == 00) {
+                        $this->update_ussd_session($sessionId, "ASSETS_MAIN_MENU", "MAIN_MENU", "MAIN_MENU");
+                        $response = $assetsMenu["pre"];
+                        $response .= $assetsMenu["options"][0];
+                        $response .= $assetsMenu["options"][1];
+                        $response .= $assetsMenu["options"][2];
+                        $response .= $assetsBackSession;
+
+                    }else if($this->get_ussd_session($sessionId)->current_screen=="ONGOING_ASSETS_MAIN_MENU" && $end_last_input == 99) {
+                        $response = $this->return_to_main_menu($sessionId);
+
+                    }else if($end_last_input && $this->get_ussd_session($sessionId)->current_screen=="ONGOING_ASSETS_MAIN_MENU") {
+                        $this->update_ussd_session($sessionId, "ONGOING_ASSET_DETAIL_MENU", "MAIN_MENU", "MAIN_MENU");
+                        $selectedAsset = $end_last_input;
                         $assetId = $ongoing_assets_ids[$selectedAsset];
                         $single_asset_due = $this->get_single_asset_amount($merchant->id, $assetId, $total_due_id, $today_date);
                         $single_asset_pending = $this->get_single_asset_amount($merchant->id, $assetId, $total_pending_id, $today_date);
@@ -358,23 +423,51 @@ class ACPUSSDController extends Controller {
                         $single_asset_total_paid = $this->get_single_asset_total_paid_amount($merchant->id, $assetId, $today_date);
                         $single_asset_outstanding = $this->get_single_asset_outstanding_amount($merchant->id, $assetId);
                         $response = "CON Status on {$this->get_asset_name($assetId)} is ONGOING. \nDue Payment: $single_asset_due \nPending: $single_asset_pending \n Overdue: $single_asset_over_due \n Past Ovedue: $single_asset_past_over_due \n Total Paid: $single_asset_total_paid \n Outstanding: $single_asset_outstanding";
+                        $response .= $assetsBackSession;
+                        $response .= $assetsHomeSession;
                 
-                    } else if($text == $merchantCredentials.'*'.'6'.'*'.'2') {
+                    }else if($this->get_ussd_session($sessionId)->current_screen=="ONGOING_ASSET_DETAIL_MENU" && $end_last_input == 00) {
+                        $this->update_ussd_session($sessionId, "ONGOING_ASSETS_MAIN_MENU", "MAIN_MENU", "MAIN_MENU");
+                        $response = $ongoingAssets["pre"];
+                        if ($ongoing_assets_ids) {
+                            foreach($ongoing_assets_ids as $asset_index => $asset)
+                                $response .= $asset_index.'. '.$this->get_asset_name($asset). "\n";
+                            $response .= $assetsBackSession;
+                            $response .= $assetsHomeSession;
+                        } else if (!$ongoing_assets_ids) {
+                            $response = 'END You do not have any ONGOING assets!';
+                        }
+
+                    }else if($this->get_ussd_session($sessionId)->current_screen=="ONGOING_ASSET_DETAIL_MENU" && $end_last_input == 99) {
+                        $response = $this->return_to_main_menu($sessionId);
+
+                    } else if($this->get_ussd_session($sessionId)->current_screen=="ASSETS_MAIN_MENU" && $end_last_input == 2) {
+                        $this->update_ussd_session($sessionId, "DEFAULTED_ASSETS_MAIN_MENU", "MAIN_MENU", "MAIN_MENU");
                         $response = $defaultedAssets["pre"];
                         if ($defaulted_assets_ids) {
                             foreach($defaulted_assets_ids as $asset_index => $asset)
                                 $response .= $asset_index.'. '.$this->get_asset_name($asset). "\n";
-                            $response .= $assetsCancelSession;
+                            $response .= $assetsBackSession;
+                            $response .= $assetsHomeSession;
                         } else if (!$defaulted_assets_ids) {
                             $response = 'END You do not have any DEFAULTED assets!';
                         }
             
-                    }else if($text == $merchantCredentials.'*'.'6'.'*'.'2'.'*'.'00') {
-                        $response = 'END Goodbye!';
-            
-                    } else if(in_array($text, $defaultedAssetsText)) {
-                        $selectedAsset = explode('*', $text)[4];
-                        $assetId = $ongoing_assets_ids[$selectedAsset];
+                    }else if($this->get_ussd_session($sessionId)->current_screen=="DEFAULTED_ASSETS_MAIN_MENU" && $end_last_input == 00) {
+                        $this->update_ussd_session($sessionId, "ASSETS_MAIN_MENU", "MAIN_MENU", "MAIN_MENU");
+                        $response = $assetsMenu["pre"];
+                        $response .= $assetsMenu["options"][0];
+                        $response .= $assetsMenu["options"][1];
+                        $response .= $assetsMenu["options"][2];
+                        $response .= $assetsBackSession;
+
+                    }else if($this->get_ussd_session($sessionId)->current_screen=="DEFAULTED_ASSETS_MAIN_MENU" && $end_last_input == 99) {
+                        $response = $this->return_to_main_menu($sessionId);
+
+                    } else if($end_last_input && $this->get_ussd_session($sessionId)->current_screen=="DEFAULTED_ASSETS_MAIN_MENU") {
+                        $this->update_ussd_session($sessionId, "DEFAULTED_ASSET_DETAIL_MENU", "MAIN_MENU", "MAIN_MENU");
+                        $selectedAsset = $end_last_input;
+                        $assetId = $defaulted_assets_ids[$selectedAsset];
                         $single_asset_due = $this->get_single_asset_amount($merchant->id, $assetId, $total_due_id, $today_date);
                         $single_asset_pending = $this->get_single_asset_amount($merchant->id, $assetId, $total_pending_id, $today_date);
                         $single_asset_over_due = $this->get_single_asset_amount($merchant->id, $assetId, $total_over_due_id, $today_date);
@@ -382,41 +475,83 @@ class ACPUSSDController extends Controller {
                         $single_asset_total_paid = $this->get_single_asset_total_paid_amount($merchant->id, $assetId, $today_date);
                         $single_asset_outstanding = $this->get_single_asset_outstanding_amount($merchant->id, $assetId);
                         $response = "CON Status on {$this->get_asset_name($assetId)} is DEFAULTED. \nDue Payment: $single_asset_due \nPending: $single_asset_pending \n Overdue: $single_asset_over_due \n Past Ovedue: $single_asset_past_over_due \n Total Paid: $single_asset_total_paid \n Outstanding: $single_asset_outstanding";
+                        $response .= $assetsBackSession;
+                        $response .= $assetsHomeSession;
                 
-                    } else if($text == $merchantCredentials.'*'.'6'.'*'.'3') {
+                    }else if($this->get_ussd_session($sessionId)->current_screen=="DEFAULTED_ASSET_DETAIL_MENU" && $end_last_input == 00) {
+                        $this->update_ussd_session($sessionId, "DEFAULTED_ASSETS_MAIN_MENU", "MAIN_MENU", "MAIN_MENU");
+                        $response = $defaultedAssets["pre"];
+                        if ($defaulted_assets_ids) {
+                            foreach($defaulted_assets_ids as $asset_index => $asset)
+                                $response .= $asset_index.'. '.$this->get_asset_name($asset). "\n";
+                            $response .= $assetsBackSession;
+                            $response .= $assetsHomeSession;
+                        } else if (!$defaulted_assets_ids) {
+                            $response = 'END You do not have any DEFAULTED assets!';
+                        }
+
+                    }else if($this->get_ussd_session($sessionId)->current_screen=="DEFAULTED_ASSET_DETAIL_MENU" && $end_last_input == 99) {
+                        $response = $this->return_to_main_menu($sessionId);
+
+                    } else if($this->get_ussd_session($sessionId)->current_screen=="ASSETS_MAIN_MENU" && $end_last_input == 3) {
+                        $this->update_ussd_session($sessionId, "COMPLETED_ASSETS_MAIN_MENU", "MAIN_MENU", "MAIN_MENU");
                         $response = $completedAssets["pre"];
                         if ($completed_assets_ids) {
                             foreach($completed_assets_ids as $asset_index => $asset)
                                 $response .= $asset_index.'. '.$this->get_asset_name($asset). "\n";
-                            $response .= $assetsCancelSession;
+                            $response .= $assetsBackSession;
+                            $response .= $assetsHomeSession;
                         } else if (!$completed_assets_ids) {
                             $response = 'END You do not have any COMPLETED assets!';
                         }
-                        
             
-                    }else if($text == $merchantCredentials.'*'.'6'.'*'.'3'.'*'.'00') {
-                        $response = 'END Goodbye!';
+                    } else if($this->get_ussd_session($sessionId)->current_screen=="COMPLETED_ASSETS_MAIN_MENU" && $end_last_input == 00) {
+                        $this->update_ussd_session($sessionId, "ASSETS_MAIN_MENU", "MAIN_MENU", "MAIN_MENU");
+                        $response = $assetsMenu["pre"];
+                        $response .= $assetsMenu["options"][0];
+                        $response .= $assetsMenu["options"][1];
+                        $response .= $assetsMenu["options"][2];
+                        $response .= $assetsBackSession;
+
+                    }else if($this->get_ussd_session($sessionId)->current_screen=="COMPLETED_ASSETS_MAIN_MENU" && $end_last_input == 99) {
+                        $response = $this->return_to_main_menu($sessionId);
             
-                    } else if(in_array($text, $defaultedAssetsText)) {
-                        $selectedAsset = explode('*', $text)[4];
-                        $assetId = $ongoing_assets_ids[$selectedAsset];
+                    } else if($end_last_input && $this->get_ussd_session($sessionId)->current_screen=="COMPLETED_ASSETS_MAIN_MENU") {
+                        $this->update_ussd_session($sessionId, "COMPLETED_ASSET_DETAIL_MENU", "MAIN_MENU", "MAIN_MENU");
+                        $selectedAsset = $end_last_input;
+                        $assetId = $completed_assets_ids[$selectedAsset];
                         $single_asset_due = $this->get_single_asset_amount($merchant->id, $assetId, $total_due_id, $today_date);
                         $single_asset_pending = $this->get_single_asset_amount($merchant->id, $assetId, $total_pending_id, $today_date);
                         $single_asset_over_due = $this->get_single_asset_amount($merchant->id, $assetId, $total_over_due_id, $today_date);
                         $single_asset_past_over_due = $this->get_single_asset_amount($merchant->id, $assetId, $total_past_over_due_id, $today_date);
                         $single_asset_total_paid = $this->get_single_asset_total_paid_amount($merchant->id, $assetId, $today_date);
                         $single_asset_outstanding = $this->get_single_asset_outstanding_amount($merchant->id, $assetId);
-                        $response = "CON Status on {$this->get_asset_name($assetId)} is DEFAULTED. \nDue Payment: $single_asset_due \nPending: $single_asset_pending \n Overdue: $single_asset_over_due \n Past Ovedue: $single_asset_past_over_due \n Total Paid: $single_asset_total_paid \n Outstanding: $single_asset_outstanding";
+                        $response = "CON Status on {$this->get_asset_name($assetId)} is COMPLETED. \nDue Payment: $single_asset_due \nPending: $single_asset_pending \n Overdue: $single_asset_over_due \n Past Ovedue: $single_asset_past_over_due \n Total Paid: $single_asset_total_paid \n Outstanding: $single_asset_outstanding";
+                        $response .= $assetsBackSession;
+                        $response .= $assetsHomeSession;
                 
-                    } else if($text == $merchantCredentials.'*'.'6'.'*'.'00') {
-                        $response = 'END Goodbye!';
+                    } else if($this->get_ussd_session($sessionId)->current_screen=="COMPLETED_ASSET_DETAIL_MENU" && $end_last_input == 00) {
+                        $this->update_ussd_session($sessionId, "COMPLETED_ASSETS_MAIN_MENU", "MAIN_MENU", "MAIN_MENU");
+                        $response = $completedAssets["pre"];
+                        if ($completed_assets_ids) {
+                            foreach($completed_assets_ids as $asset_index => $asset)
+                                $response .= $asset_index.'. '.$this->get_asset_name($asset). "\n";
+                            $response .= $assetsBackSession;
+                            $response .= $assetsHomeSession;
+                        } else if (!$completed_assets_ids) {
+                            $response = 'END You do not have any COMPLETED assets!';
+                        }
 
-                    }else if($text == $merchantCredentials.'*'.'7') {
+                    } else if($this->get_ussd_session($sessionId)->current_screen=="COMPLETED_ASSET_DETAIL_MENU" && $end_last_input == 99) {
+                        $response = $this->return_to_main_menu($sessionId);
+
+                    } else if($this->get_ussd_session($sessionId)->current_screen=="MAIN_MENU" && $end_last_input == 7) {
+                        $this->update_ussd_session($sessionId, "SUMMARY_MENU", "MAIN_MENU", "MAIN_MENU");
                         $response = "CON Total number of assets: {$this->get_assets_count($merchant->id)} \nTotal Due: $total_due_amount \nTotal Pending: $total_pending_amount \n Total Overdue: $total_over_due_amount \n Total Past Ovedue: $total_past_over_due_amount \nTotal Defaulted: $total_defaulted_amount \n\n";
-                        $response .= $assetsCancelSession;
+                        $response .= $assetsBackSession;
 
-                    } else if($text == $merchantCredentials.'*'.'7'.'*'.'00') {
-                        $response = 'END Goodbye!';
+                    } else if($this->get_ussd_session($sessionId)->current_screen=="SUMMARY_MENU" && $end_last_input == 00) {
+                        $response = $this->return_to_main_menu($sessionId);
             
                     }
                 }
